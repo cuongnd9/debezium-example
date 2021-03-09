@@ -4,25 +4,18 @@ networks:
   4pet-net:
     driver: bridge
 
-volumes:
-  app-db:
-  elasticsearch:
-
 services:
 
   app-db:
     container_name: app-db
-    image: 'debezium/postgres:11'
+    image: debezium/example-postgres:${DEBEZIUM_VERSION:-1.2}
     ports:
       - "5432:5432"
     environment:
-      - 'POSTGRES_MULTIPLE_DATABASES=aggregator_service'
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
     volumes:
-      - 'app-db:/var/lib/postgresql/data'
-      - '$PWD/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d'
-      - '$PWD/mocking:/mocking'
+      - ./inventory-addresses.sql:/docker-entrypoint-initdb.d/zzz.sql
     networks:
       - 4pet-net
 
@@ -36,8 +29,6 @@ services:
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: "-Xms1g -Xmx1g"
       discovery.type: "single-node"
-    volumes:
-     - elasticsearch:/usr/share/elasticsearch/data
     networks:
       - 4pet-net
 
