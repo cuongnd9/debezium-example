@@ -1,7 +1,9 @@
 version: '3'
+
 networks:
   4pet-net:
     driver: bridge
+
 volumes:
   app-db:
   elasticsearch:
@@ -34,7 +36,7 @@ services:
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: "-Xms1g -Xmx1g"
       discovery.type: "single-node"
-   volumes:
+    volumes:
      - elasticsearch:/usr/share/elasticsearch/data
     networks:
       - 4pet-net
