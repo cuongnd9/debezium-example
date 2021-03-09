@@ -1,0 +1,179 @@
+version: '3'
+networks:
+  4pet-net:
+    driver: bridge
+volumes:
+  app-db:
+  elasticsearch:
+
+services:
+
+  app-db:
+    container_name: app-db
+    image: 'debezium/postgres:11'
+    ports:
+      - "5432:5432"
+    environment:
+      - 'POSTGRES_MULTIPLE_DATABASES=aggregator_service'
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - 'app-db:/var/lib/postgresql/data'
+      - '$PWD/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d'
+      - '$PWD/mocking:/mocking'
+    networks:
+      - 4pet-net
+
+  elasticsearch:
+    container_name: elasticsearch
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.5.0
+    hostname: elasticsearch
+    ports:
+      - "9200:9200"
+    environment:
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+      discovery.type: "single-node"
+   volumes:
+     - elasticsearch:/usr/share/elasticsearch/data
+    networks:
+      - 4pet-net
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper
+    networks:
+      - 4pet-net
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_LOG4J_ROOT_LOGLEVEL: WARN
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  broker:
+    image: confluentinc/cp-enterprise-kafka
+    hostname: broker
+    networks:
+      - 4pet-net
+    container_name: broker
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    expose:
+      - "9093"
+    environment:
+      KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://broker:9093,OUTSIDE://broker:9092'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'PLAINTEXT:PLAINTEXT,OUTSIDE:PLAINTEXT'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9093,OUTSIDE://0.0.0.0:9092'
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: 'broker:9093'
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_GROUP_MAX_SESSION_TIMEOUT_MS: 300000
+      KAFKA_GROUP_MIN_SESSION_TIMEOUT_MS: 100
+      CONFLUENT_METRICS_REPORTER_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+      CONFLUENT_METRICS_ENABLE: 'true'
+      CONFLUENT_SUPPORT_CUSTOMER_ID: anonymous
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry
+    networks:
+      - 4pet-net
+    hostname: schema-registry
+    container_name: schema-registry
+    depends_on:
+      - zookeeper
+      - broker
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_LOG4J_ROOT_LOGLEVEL: WARN
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL: 'zookeeper:2181'
+
+  connect:
+    image: confluentinc/cp-kafka-connect
+    networks:
+      - 4pet-net
+    hostname: connect
+    container_name: connect
+    depends_on:
+      - zookeeper
+      - broker
+      - schema-registry
+    ports:
+      - "8083:8083"
+    volumes:
+      - '$PWD/.tmp/connect/plugins:/tmp/connect-plugins'
+    environment:
+      CONNECT_LOG4J_ROOT_LOGLEVEL: WARN
+      CONNECT_BOOTSTRAP_SERVERS: 'broker:9093'
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: compose-connect-group
+      CONNECT_CONFIG_STORAGE_TOPIC: docker-connect-configs
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_FLUSH_INTERVAL_MS: 10000
+      CONNECT_OFFSET_STORAGE_TOPIC: docker-connect-offsets
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_TOPIC: docker-connect-status
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+      CONNECT_INTERNAL_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_INTERNAL_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      CONNECT_PLUGIN_PATH: '/usr/share/java,/tmp/connect-plugins,/usr/share/confluent-hub-components'
+      CONNECT_LOG4J_LOGGERS: 'org.apache.zookeeper=WARN,org.I0Itec.zkclient=WARN,org.reflections=ERROR'
+    command:
+      - bash
+      - '-c'
+      - |
+        confluent-hub install --no-prompt debezium/debezium-connector-postgresql:1.2.2
+        confluent-hub install --no-prompt confluentinc/kafka-connect-elasticsearch:10.0.0
+        confluent-hub install --no-prompt neo4j/kafka-connect-neo4j:1.0.9
+        /etc/confluent/docker/run
+
+  control-center:
+    image: confluentinc/cp-enterprise-control-center
+    networks:
+      - 4pet-net
+    hostname: control-center
+    container_name: control-center
+    depends_on:
+      - zookeeper
+      - broker
+      - schema-registry
+      - connect
+    ports:
+      - "9021:9021"
+    environment:
+      CONTROL_CENTER_LOG4J_ROOT_LOGLEVEL: WARN
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: 'broker:9093'
+      CONTROL_CENTER_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      CONTROL_CENTER_CONNECT_CLUSTER: 'connect:8083'
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
+      CONFLUENT_METRICS_TOPIC_REPLICATION: 1
+      PORT: 9021
+
+  aggregator-service:
+    container_name: aggregator-service
+    build:
+      context: ./aggregator-service
+      dockerfile: Dockerfile
+    environment:
+      QUARKUS_KAFKA_STREAMS_BOOTSTRAP_SERVERS: broker:9092
+    networks:
+      - 4pet-net
